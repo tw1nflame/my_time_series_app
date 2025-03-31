@@ -152,7 +152,11 @@ def run_training():
 
             # Если была выбрана модель Chronos, то явно указываем путь, по которому лежит модель
             if "Chronos" in hyperparams:
-                hyperparams["Chronos"] = {"model_path": "autogluon/chronos-bolt-base"}
+                hyperparams["Chronos"] = [
+                    {"model_path": "autogluon/chronos-bolt-base", "ag_args": {"name_suffix": "ZeroShot"}},
+                    {"model_path": "autogluon/chronos-bolt-small", "ag_args": {"name_suffix": "ZeroShot"}},
+                    {"model_path": "autogluon/chronos-bolt-small", "fine_tune": True, "ag_args": {"name_suffix": "FineTuned"}}
+                ]
 
         progress_bar.progress(40)
 
