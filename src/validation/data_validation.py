@@ -1,13 +1,13 @@
 # src/validation/data_validation.py
-# src/validation/data_validation.py
 import pandas as pd
-import numpy as np
 import logging
 import streamlit as st
-from typing import Tuple, List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import time
+import gc
+from collections import Counter
 
 def validate_dataset(df: pd.DataFrame, 
                     dt_col: str, 
@@ -47,9 +47,9 @@ def validate_dataset(df: pd.DataFrame,
             try:
                 # Пытаемся преобразовать к datetime
                 pd.to_datetime(df[dt_col], errors='raise')
-            except Exception:
+            except (ValueError, TypeError, pd.errors.OutOfBoundsDatetime) as e:
                 result["is_valid"] = False
-                result["errors"].append(f"Колонка {dt_col} содержит некорректные значения дат.")
+                result["errors"].append(f"Колонка {dt_col} содержит некорректные значения дат: {e}")
                 return result
     
     # Проверка типа данных в колонке target
@@ -84,51 +84,70 @@ def validate_dataset(df: pd.DataFrame,
         if outliers_count > 0:
             result["warnings"].append(f"Обнаружено {outliers_count} выбросов в колонке {tgt_col} ({outliers_count/len(df)*100:.2f}%).")
     
-    # Проверка временного ряда на непрерывность
-    if dt_col and dt_col != "<нет>" and dt_col in df.columns:
+    # Проверка временного ряда на непрерывность (ОПТИМИЗИРОВАНО)
+    if dt_col and dt_col != "<нет>" and dt_col in df.columns and pd.api.types.is_datetime64_any_dtype(df[dt_col]):
         if id_col and id_col != "<нет>" and id_col in df.columns:
-            # Для каждого ID проверяем непрерывность
-            for id_value in df[id_col].unique():
-                subset = df[df[id_col] == id_value].sort_values(dt_col)
-                if len(subset) <= 1:
-                    continue
-                    
-                if pd.api.types.is_datetime64_any_dtype(subset[dt_col]):
-                    time_series = subset[dt_col]
-                else:
-                    time_series = pd.to_datetime(subset[dt_col])
-                    
-                # Определяем наиболее вероятную частоту
-                try:
-                    most_common_diff = pd.Series(np.diff(time_series)).value_counts().index[0]
-                    expected_dates = pd.date_range(start=time_series.min(), 
-                                                  end=time_series.max(), 
-                                                  freq=pd.tseries.frequencies.to_offset(most_common_diff))
-                    missing_dates = set(expected_dates) - set(time_series)
-                    
-                    if missing_dates:
-                        result["warnings"].append(f"Для ID={id_value} обнаружены пропуски в датах. Отсутствует {len(missing_dates)} точек.")
-                except Exception as e:
-                    result["warnings"].append(f"Для ID={id_value} не удалось определить частоту временного ряда: {e}")
-        else:
-            # Обрабатываем как единый временной ряд
-            sorted_df = df.sort_values(dt_col)
-            if pd.api.types.is_datetime64_any_dtype(sorted_df[dt_col]):
-                time_series = sorted_df[dt_col]
+            logging.info("Начало проверки непрерывности временных рядов по ID...")
+            start_time = time.time()
+            df_sorted = df[[id_col, dt_col]].sort_values(by=[id_col, dt_col])
+            # Считаем разницу во времени внутри каждой группы ID
+            df_sorted['time_diff'] = df_sorted.groupby(id_col)[dt_col].diff()
+
+            # Убираем первую запись для каждой группы (у нее нет предыдущей)
+            valid_diffs = df_sorted['time_diff'].dropna()
+
+            if not valid_diffs.empty:
+                # Находим наиболее частую разницу во времени (моду)
+                # Используем Counter для эффективности на больших данных
+                diff_counts = Counter(valid_diffs)
+                most_common_diff = diff_counts.most_common(1)[0][0]
+                logging.info("Наиболее частый интервал (частота): %s", most_common_diff)
+
+                # Находим пропуски - строки, где разница больше наиболее частой
+                # Добавляем небольшой допуск (1 секунда) для плавающей точки
+                tolerance = pd.Timedelta(seconds=1)
+                gaps = df_sorted[df_sorted['time_diff'] > (most_common_diff + tolerance)]
+                num_gaps = len(gaps)
+                
+                if num_gaps > 0:
+                    unique_gaps_count = gaps[id_col].nunique()
+                    result["warnings"].append(f"Обнаружено {num_gaps} пропусков во временных рядах для {unique_gaps_count} ID (ожидаемый интервал: {most_common_diff}).")
+                    # Опционально: можно добавить примеры ID с пропусками
+                    # example_ids_with_gaps = gaps[id_col].unique()[:5]
+                    # result["warnings"].append(f"Примеры ID с пропусками: {list(example_ids_with_gaps)}")
             else:
-                time_series = pd.to_datetime(sorted_df[dt_col])
+                logging.info("Недостаточно данных для определения частоты и пропусков (менее 2 точек на ID).")
                 
-            try:
-                most_common_diff = pd.Series(np.diff(time_series)).value_counts().index[0]
-                expected_dates = pd.date_range(start=time_series.min(), 
-                                              end=time_series.max(), 
-                                              freq=pd.tseries.frequencies.to_offset(most_common_diff))
-                missing_dates = set(expected_dates) - set(time_series)
+            end_time = time.time()
+            logging.info("Проверка непрерывности завершена за %.2f сек.", end_time - start_time)
+            # Удаляем временную колонку и сортированный датафрейм для экономии памяти
+            del df_sorted
+            gc.collect()
+        else:
+            # Проверка непрерывности для одного временного ряда (без ID)
+            logging.info("Начало проверки непрерывности одного временного ряда...")
+            start_time = time.time()
+            df_sorted = df[[dt_col]].sort_values(by=dt_col).drop_duplicates()
+            if len(df_sorted) > 1:
+                time_diffs = df_sorted[dt_col].diff().dropna()
+                if not time_diffs.empty:
+                    diff_counts = Counter(time_diffs)
+                    most_common_diff = diff_counts.most_common(1)[0][0]
+                    logging.info("Наиболее частый интервал (частота): %s", most_common_diff)
+                    tolerance = pd.Timedelta(seconds=1)
+                    gaps = df_sorted[df_sorted[dt_col].diff() > (most_common_diff + tolerance)]
+                    num_gaps = len(gaps)
+                    if num_gaps > 0:
+                        result["warnings"].append(f"Обнаружено {num_gaps} пропусков во временном ряду (ожидаемый интервал: {most_common_diff}).")
+                else:
+                     logging.info("Недостаточно данных для определения частоты и пропусков (менее 2 точек).")
+            else:
+                logging.info("Недостаточно данных для проверки непрерывности (1 точка).")
                 
-                if missing_dates:
-                    result["warnings"].append(f"Обнаружены пропуски в датах. Отсутствует {len(missing_dates)} точек.")
-            except Exception as e:
-                result["warnings"].append(f"Не удалось определить частоту временного ряда: {e}")
+            end_time = time.time()
+            logging.info("Проверка непрерывности одного ряда завершена за %.2f сек.", end_time - start_time)
+            del df_sorted
+            gc.collect()
     
     # Рассчитываем и сохраняем статистики
     result["stats"] = {

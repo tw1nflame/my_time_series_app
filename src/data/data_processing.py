@@ -69,31 +69,33 @@ def load_data(uploaded_file: st.runtime.uploaded_file_manager.UploadedFile,
 
 def _load_csv_standard(uploaded_file) -> pd.DataFrame:
     """
-    Стандартная загрузка CSV без разбиения на чанки.
+    Стандартная загрузка CSV без разбиения на чанки, оптимизированная.
     """
-    data_bytes = uploaded_file.read()
-    text_obj = StringIO(data_bytes.decode('utf-8', errors='replace'))
+    # Сбрасываем указатель на начало файла
+    uploaded_file.seek(0)
+
+    # Пробуем стандартные разделители с быстрым движком 'c'
+    common_separators = [';', ',']
+    for sep in common_separators:
+        try:
+            uploaded_file.seek(0) # Важно сбрасывать перед каждой попыткой
+            df = pd.read_csv(uploaded_file, sep=sep, engine='c', low_memory=False)
+            if df.shape[1] > 1:
+                logging.info(f"Успешно прочитан CSV (sep='{sep}', engine='c'). Колонки: {list(df.columns)}")
+                return df
+        except Exception as e:
+            logging.debug(f"Не удалось прочитать CSV с sep='{sep}' и engine='c': {e}")
+
+    # Если стандартные разделители не сработали, пробуем авто-определение с engine='python'
     try:
-        df = pd.read_csv(text_obj, sep=None, engine='python', thousands=' ')
+        uploaded_file.seek(0)
+        df = pd.read_csv(uploaded_file, sep=None, engine='python', low_memory=False)
+        logging.info(f"Успешно прочитан CSV (auto-detect, engine='python'). Колонки: {list(df.columns)}")
         if df.shape[1] == 1:
-            logging.warning("Авто-детект нашёл только 1 столбец. Возможно необычный разделитель.")
-        logging.info(f"Успешно прочитан CSV (auto-detect). Колонки: {list(df.columns)}")
+            logging.warning("Авто-детект нашёл только 1 столбец с engine='python'. Разделитель может быть необычным.")
         return df
     except Exception as e:
-        logging.warning(f"Авто-определение разделителя не сработало: {e}")
-        text_obj.seek(0)
-        try:
-            df_semicolon = pd.read_csv(text_obj, sep=';', encoding='utf-8', thousands=' ')
-            if df_semicolon.shape[1] > 1:
-                logging.info(f"Успешно прочитан CSV (sep=';'). Колонки: {list(df_semicolon.columns)}")
-                return df_semicolon
-        except:
-            pass
-        text_obj.seek(0)
-        df_comma = pd.read_csv(text_obj, sep=',', encoding='utf-8', thousands=' ')
-        if df_comma.shape[1] > 1:
-            logging.info(f"Успешно прочитан CSV (sep=','). Колонки: {list(df_comma.columns)}")
-            return df_comma
+        logging.error(f"Полностью не удалось прочитать CSV: {e}")
         raise ValueError("Не удалось автоматически определить разделитель CSV. Попробуйте ';' или ',' или сохраните файл в UTF-8.")
 
 def _load_csv_in_chunks(uploaded_file, chunk_size):
@@ -152,7 +154,6 @@ def _load_csv_in_chunks(uploaded_file, chunk_size):
             chunksize=chunk_size, 
             encoding=encoding, 
             errors='replace',
-            thousands=' ',
             low_memory=True
         ):
             # Отправляем чанк на обработку
