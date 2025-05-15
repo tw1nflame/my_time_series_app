@@ -16,6 +16,7 @@ def validate_dataset(df: pd.DataFrame,
     """
     Проверяет датасет на корректность и возвращает словарь с результатами валидации.
     """
+    #logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     result = {
         "is_valid": True,
         "errors": [],
@@ -37,6 +38,7 @@ def validate_dataset(df: pd.DataFrame,
     
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
+        logging.error(f"Отсутствуют обязательные колонки: {', '.join(missing_cols)}")
         result["is_valid"] = False
         result["errors"].append(f"Отсутствуют обязательные колонки: {', '.join(missing_cols)}")
         return result
@@ -48,6 +50,7 @@ def validate_dataset(df: pd.DataFrame,
                 # Пытаемся преобразовать к datetime
                 pd.to_datetime(df[dt_col], errors='raise')
             except (ValueError, TypeError, pd.errors.OutOfBoundsDatetime) as e:
+                logging.error(f"Колонка {dt_col} содержит некорректные значения дат: {e}")
                 result["is_valid"] = False
                 result["errors"].append(f"Колонка {dt_col} содержит некорректные значения дат: {e}")
                 return result
@@ -55,6 +58,7 @@ def validate_dataset(df: pd.DataFrame,
     # Проверка типа данных в колонке target
     if tgt_col and tgt_col != "<нет>" and tgt_col in df.columns:
         if not pd.api.types.is_numeric_dtype(df[tgt_col]):
+            logging.error(f"Колонка {tgt_col} должна содержать числовые значения.")
             result["is_valid"] = False
             result["errors"].append(f"Колонка {tgt_col} должна содержать числовые значения.")
             return result
@@ -167,6 +171,11 @@ def validate_dataset(df: pd.DataFrame,
     if id_col and id_col != "<нет>" and id_col in df.columns:
         result["stats"]["unique_ids"] = df[id_col].nunique()
     
+    # Логгирование предупреждений
+    if result["warnings"]:
+        for w in result["warnings"]:
+            logging.warning(f"[validate_dataset] {w}")
+            
     return result
 
 def display_validation_results(validation_results: Dict[str, Any]):
