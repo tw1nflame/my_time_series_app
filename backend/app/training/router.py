@@ -205,6 +205,8 @@ def fill_to_frequency(df: pd.DataFrame, training_params: TrainingParameters, ses
         for unique_id, group in df.groupby(id_col):
             group = group.copy()
             group[dt_col] = pd.to_datetime(group[dt_col])
+            # Дропаем дубликаты по дате (оставляем первое вхождение)
+            group = group.drop_duplicates(subset=[dt_col], keep='first')
             full_range = pd.date_range(group[dt_col].min(), group[dt_col].max(), freq=freq_short)
             was_extended = len(full_range) > len(group)
             group = group.set_index(dt_col).reindex(full_range).rename_axis(dt_col).reset_index()
