@@ -177,8 +177,12 @@ def fill_to_frequency(df: pd.DataFrame, training_params: TrainingParameters, ses
     if id_col not in df.columns:
         df = df.copy()
         df[dt_col] = pd.to_datetime(df[dt_col])
+        # Универсальная агрегация по частоте (если есть дубли по времени)
+        df = df.set_index(dt_col)
+        # Если частота ниже исходной (например, с дней на месяцы), агрегируем (берём последнее значение)
+        df = df.groupby(pd.Grouper(freq=freq_short)).agg({tgt_col: 'last'})
+        df = df.reset_index()
         full_range = pd.date_range(df[dt_col].min(), df[dt_col].max(), freq=freq_short)
-        
         if len(full_range) > len(df):
             df = df.set_index(dt_col).reindex(full_range).rename_axis(dt_col).reset_index()
             df[tgt_col] = df[tgt_col].ffill()
@@ -205,6 +209,10 @@ def fill_to_frequency(df: pd.DataFrame, training_params: TrainingParameters, ses
         for unique_id, group in df.groupby(id_col):
             group = group.copy()
             group[dt_col] = pd.to_datetime(group[dt_col])
+            # Универсальная агрегация по частоте (берём последнее значение в каждом периоде)
+            group = group.set_index(dt_col)
+            group = group.groupby(pd.Grouper(freq=freq_short)).agg({tgt_col: 'last'})
+            group = group.reset_index()
             # Дропаем дубликаты по дате (оставляем первое вхождение)
             group = group.drop_duplicates(subset=[dt_col], keep='first')
             full_range = pd.date_range(group[dt_col].min(), group[dt_col].max(), freq=freq_short)
