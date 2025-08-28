@@ -365,7 +365,13 @@ def train_model(
         training_sessions[session_id] = status  # обновляем кэш
         session_path = get_session_path(session_id)
         combined_leaderboard = automl_manager.combine_leaderboards(session_id, [strategy.name for strategy in automl_manager.get_strategies()])
-        combined_leaderboard.to_csv(os.path.join(session_path, 'leaderboard.csv'), index=False)
+        leaderboard_path = os.path.join(session_path, 'leaderboard.csv')
+        if combined_leaderboard is not None and not combined_leaderboard.empty:
+            combined_leaderboard.to_csv(leaderboard_path, index=False)
+        else:
+            # Если нет моделей, создаём пустой leaderboard с дефолтными колонками
+            empty_cols = ['model', 'score_val', 'score_test', 'fit_time', 'pred_time_val', 'pred_time_test']
+            pd.DataFrame(columns=empty_cols).to_csv(leaderboard_path, index=False)
         gc.collect()
         logging.info(f"[train_model] Очистка памяти завершена.")
 
