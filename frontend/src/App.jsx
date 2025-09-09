@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import './App.css'
 import { DataProvider, useData } from './contexts/DataContext'
-import LogoImage from './assets/logo.jpg'
+import LogoImage from './assets/logo.png'
 
 // Import page components (to be created)
 import Dashboard from './components/Dashboard'
